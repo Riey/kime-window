@@ -1,41 +1,50 @@
+mod emoji;
+
 use ahash::AHashMap;
 use gtk::prelude::*;
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixListener;
 use std::rc::Rc;
 use std::time::Instant;
 
-type Dict = AHashMap<&'static str, Vec<HanjaEntry>>;
+type Dict = AHashMap<&'static str, Vec<(&'static str, &'static str)>>;
 
-fn spawn_window<'a>(window: &gtk::Window, hangul: &'a str, dict: &Dict) -> &'a str {
-    let ret = Rc::new(Cell::new(""));
-    let search_str = Rc::new(RefCell::new(glib::GString::from(hangul)));
-
-    let hanja_entires = match dict.get(hangul) {
-        Some(entires) => entires,
-        _ => return hangul,
-    };
+fn spawn_window<
+    'a,
+    F: Fn(&str, &str) -> bool + 'static,
+    I: Iterator<Item = (&'static str, &'static str)>,
+>(
+    window: &gtk::Window,
+    entires: impl IntoIterator<IntoIter = I, Item = (&'static str, &'static str)>
+        + std::iter::ExactSizeIterator,
+    filter: F,
+) -> Option<&'static str> {
+    let ret = Rc::new(Cell::new(None));
 
     let window_box = gtk::Box::new(gtk::Orientation::Vertical, 5);
+
+    let scroll = gtk::ScrolledWindowBuilder::new()
+    .build();
 
     let lbox = gtk::ListBoxBuilder::new()
         .selection_mode(gtk::SelectionMode::Single)
         .activate_on_single_click(true)
         .build();
 
-    let search_str1 = search_str.clone();
-    let mut ids = Vec::with_capacity(hanja_entires.len());
+    let entry = gtk::SearchEntryBuilder::new().build();
 
-    for &entry in hanja_entires {
-        let label_str = format!("{}: {}", entry.hanja, entry.description);
+    let mut ids = Vec::with_capacity(entires.len());
+
+    for (value, description) in entires {
+        let label_str = format!("{}: {}", value, description);
         let label = gtk::LabelBuilder::new().label(&label_str).build();
         let window1 = window.clone();
         let row = gtk::ListBoxRowBuilder::new().child(&label).build();
         let ret = Rc::downgrade(&ret);
         let id = row.connect_activate(move |_| {
-            ret.upgrade().unwrap().set(entry.hanja);
+            ret.upgrade().unwrap().set(Some(value));
             window1.hide();
             gtk::main_quit();
         });
@@ -43,21 +52,14 @@ fn spawn_window<'a>(window: &gtk::Window, hangul: &'a str, dict: &Dict) -> &'a s
         ids.push((id, row));
     }
 
+    let entry1 = entry.clone();
     lbox.set_filter_func(Some(Box::new(move |row: &gtk::ListBoxRow| {
         let label = row.get_child().unwrap().downcast::<gtk::Label>().unwrap();
-        label
-            .get_text()
-            .as_str()
-            .contains(search_str1.borrow().as_str())
+        filter(label.get_text().as_str(), entry1.get_text().as_str())
     })));
 
-    let entry = gtk::SearchEntryBuilder::new()
-        .text(search_str.borrow().as_str())
-        .build();
-
     let lbox1 = lbox.clone();
-    let search_changed = entry.connect_search_changed(move |entry| {
-        *search_str.borrow_mut() = entry.get_text();
+    let search_changed = entry.connect_search_changed(move |_| {
         lbox1.invalidate_filter();
     });
 
@@ -69,12 +71,13 @@ fn spawn_window<'a>(window: &gtk::Window, hangul: &'a str, dict: &Dict) -> &'a s
 
     window_box.add(&entry);
     window_box.add(&lbox);
-    window.add(&window_box);
+    scroll.add(&window_box);
+    window.add(&scroll);
     window.show_all();
 
     gtk::main();
 
-    window.remove(&window_box);
+    window.remove(&scroll);
 
     glib::signal_handler_disconnect(window, deleted);
     glib::signal_handler_disconnect(&entry, search_changed);
@@ -83,19 +86,10 @@ fn spawn_window<'a>(window: &gtk::Window, hangul: &'a str, dict: &Dict) -> &'a s
         glib::signal_handler_disconnect(&row, id);
     }
 
-    match ret.take() {
-        "" => hangul,
-        other => other,
-    }
+    ret.take()
 }
 
-#[derive(Clone, Copy)]
-struct HanjaEntry {
-    hanja: &'static str,
-    description: &'static str,
-}
-
-fn load_dict() -> Dict {
+fn load_hanja_dict() -> Dict {
     include_flate::flate!(static HANJA_DATA: str from "hanja/hanja.txt");
 
     let mut dict = Dict::new();
@@ -118,9 +112,7 @@ fn load_dict() -> Dict {
                     continue;
                 }
 
-                dict.entry(hangul)
-                    .or_default()
-                    .push(HanjaEntry { hanja, description });
+                dict.entry(hangul).or_default().push((hanja, description));
             }
             None => continue,
         }
@@ -132,23 +124,21 @@ fn load_dict() -> Dict {
 fn main() {
     gtk::init().unwrap();
 
-    std::fs::remove_file("/tmp/kime_hanja.sock").ok();
+    std::fs::remove_file("/tmp/kime_window.sock").ok();
 
     let start = Instant::now();
-    let dict = load_dict();
+    let dict = load_hanja_dict();
     let elapsed = start.elapsed();
 
     eprintln!("Hanja dict loaded! elapsed: {}ms", elapsed.as_millis());
 
     let window = gtk::WindowBuilder::new()
+        .default_width(1000)
+        .default_height(800)
         .resizable(false)
-        .decorated(false)
-        .deletable(true)
-        .width_request(600)
-        .height_request(500)
         .build();
 
-    let sock = UnixListener::bind("/tmp/kime_hanja.sock").expect("Connect socket");
+    let sock = UnixListener::bind("/tmp/kime_window.sock").expect("Connect socket");
     let mut buf = Vec::with_capacity(8196);
 
     loop {
@@ -158,11 +148,35 @@ fn main() {
         let len = client.read_to_end(&mut buf).expect("Read client");
         let data = &buf[..len];
 
-        if let Ok(data) = std::str::from_utf8(data) {
-            let hanja = spawn_window(&window, data.trim_end(), &dict);
-            client.write_all(hanja.as_bytes()).ok();
-        } else {
-            eprintln!("Not UTF-8");
+        if let Some((ty, data)) = data.split_first() {
+            match *ty {
+                // hanja
+                b'h' => {
+                    if let Ok(data) = std::str::from_utf8(data) {
+                        let data = data.trim_end();
+                        if let Some(entires) = dict.get(data) {
+                            let hanja = spawn_window(&window, entires.iter().copied(), |l, s| {
+                                l.contains(s)
+                            })
+                            .unwrap_or(data);
+                            client.write_all(hanja.as_bytes()).ok();
+                        }
+                    } else {
+                        eprintln!("Not UTF-8");
+                    }
+                }
+                // emoji
+                b'e' => {
+                    if let Some(emoji) =
+                        spawn_window(&window, emoji::EMOJIS.iter().copied(), |l, s| l.contains(s))
+                    {
+                        client.write_all(emoji.as_bytes()).ok();
+                    }
+                }
+                other => {
+                    eprintln!("Unknown type: {}", other);
+                }
+            }
         }
 
         client.shutdown(std::net::Shutdown::Both).ok();
