@@ -579,6 +579,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4bcf54b5c39d49477a0706720c7ff28d0bdb2a4894e8bb5423dcd5cf98337cd5"
 dependencies = [
  "libflate",
+ "proc-macro-hack",
  "proc-macro2 0.4.30",
  "quote 0.6.13",
  "syn 0.15.44",

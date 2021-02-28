@@ -285,9 +285,11 @@ fn main() -> anyhow::Result<()> {
                         if let Ok(data) = std::str::from_utf8(data) {
                             let data = data.trim_end();
                             if let Some(entires) = dict.get(data) {
-                                if let Some(hanja) =
-                                    spawn_window(&ui, &build_list_box(entires.iter().copied(), &main_loop), &main_loop)
-                                {
+                                if let Some(hanja) = spawn_window(
+                                    &ui,
+                                    &build_list_box(entires.iter().copied(), &main_loop),
+                                    &main_loop,
+                                ) {
                                     output
                                         .write_all_async_future(
                                             hanja.as_bytes(),

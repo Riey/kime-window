@@ -58,11 +58,7 @@ pub fn gen_emoji(emoji_out: &Path, annotation_path: &Path) -> quick_xml::Result<
     for (cp, text) in annotation_map.iter() {
         write!(emoji_out, "(\"")?;
         for ch in cp.chars() {
-            if ch == '\\' {
-                write!(emoji_out, "\\\\")?;
-            } else {
-                write!(emoji_out, "\\u{{{:x}}}", ch as u32)?;
-            }
+            write!(emoji_out, "\\u{{{:x}}}", ch as u32)?;
         }
         writeln!(emoji_out, "\", \"{}\"),", text)?;
     }
