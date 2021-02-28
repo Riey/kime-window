@@ -1,8 +1,8 @@
 use quick_xml::events::Event;
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::Path;
 use std::io::{BufReader, BufWriter, Write};
+use std::path::Path;
 
 pub fn gen_emoji(emoji_out: &Path, annotation_path: &Path) -> quick_xml::Result<()> {
     let emoji_out = fs::File::create(emoji_out)?;

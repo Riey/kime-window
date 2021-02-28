@@ -8,7 +8,6 @@ use gtk::prelude::*;
 use libappindicator::{AppIndicator, AppIndicatorStatus};
 
 use std::cell::Cell;
-use std::rc::Rc;
 use std::time::Instant;
 
 type Dict = AHashMap<&'static str, Vec<(&'static str, &'static str)>>;
@@ -18,89 +17,99 @@ enum IconColor {
     White,
 }
 
-fn spawn_window<
-    'a,
-    F: Fn(&str, &str) -> bool + 'static,
-    I: Iterator<Item = (&'static str, &'static str)>,
->(
-    window: &gtk::Window,
-    entires: impl IntoIterator<IntoIter = I, Item = (&'static str, &'static str)>
-        + std::iter::ExactSizeIterator,
-    filter: F,
-) -> Option<&'a str> {
-    let ctx = glib::MainContext::ref_thread_default();
-    ctx.push_thread_default();
+thread_local! {
+    static RET: Cell<Option<&'static str>> = Cell::new(None);
+}
 
-    let main_loop = glib::MainLoop::new(Some(&ctx), false);
-    let ret = Rc::new(Cell::new(None));
-
-    let window_box = gtk::Box::new(gtk::Orientation::Vertical, 5);
-
-    let scroll = gtk::ScrolledWindowBuilder::new().build();
-
+fn build_list_box<I: Iterator<Item = (&'static str, &'static str)>>(
+    entires: impl IntoIterator<IntoIter = I, Item = (&'static str, &'static str)>,
+    main_loop: &glib::MainLoop,
+) -> gtk::ListBox {
     let lbox = gtk::ListBoxBuilder::new()
         .selection_mode(gtk::SelectionMode::Single)
         .activate_on_single_click(true)
         .build();
-
-    let entry = gtk::SearchEntryBuilder::new().build();
-
-    let mut ids = Vec::with_capacity(entires.len());
 
     for (value, description) in entires {
         let label_str = format!("{}: {}", value, description);
         let label = gtk::LabelBuilder::new().label(&label_str).build();
         let row = gtk::ListBoxRowBuilder::new().child(&label).build();
         let main_loop = main_loop.clone();
-        let ret = ret.clone();
-        let id = row.connect_activate(move |_| {
-            ret.set(Some(value));
+        row.connect_activate(move |_| {
+            RET.with(|ret| ret.set(Some(value)));
             main_loop.quit();
         });
         lbox.add(&row);
-        ids.push((id, row));
     }
 
-    let entry1 = entry.clone();
+    lbox
+}
+
+struct UiBase {
+    window: gtk::Window,
+    window_box: gtk::Box,
+    entry: gtk::SearchEntry,
+}
+
+impl UiBase {
+    pub fn new(main_loop: &glib::MainLoop) -> Self {
+        let window = gtk::WindowBuilder::new()
+            .default_width(1000)
+            .default_height(800)
+            .resizable(false)
+            .build();
+
+        let main_loop = main_loop.clone();
+        window.connect_delete_event(move |_, _| {
+            main_loop.quit();
+            gtk::Inhibit(true)
+        });
+
+        let window_box = gtk::Box::new(gtk::Orientation::Vertical, 5);
+
+        let scroll = gtk::ScrolledWindowBuilder::new().build();
+
+        let entry = gtk::SearchEntryBuilder::new().build();
+
+        window_box.add(&entry);
+        scroll.add(&window_box);
+        window.add(&scroll);
+
+        Self {
+            window,
+            window_box,
+            entry,
+        }
+    }
+}
+
+fn spawn_window(
+    ui: &UiBase,
+    lbox: &gtk::ListBox,
+    main_loop: &glib::MainLoop,
+) -> Option<&'static str> {
+    let entry1 = ui.entry.clone();
     lbox.set_filter_func(Some(Box::new(move |row: &gtk::ListBoxRow| {
         let label = row.get_child().unwrap().downcast::<gtk::Label>().unwrap();
-        filter(label.get_text().as_str(), entry1.get_text().as_str())
+        label
+            .get_text()
+            .as_str()
+            .contains(entry1.get_text().as_str())
     })));
-
     let lbox1 = lbox.clone();
-    let search_changed = entry.connect_search_changed(move |_| {
+    let search_changed = ui.entry.connect_search_changed(move |_| {
         lbox1.invalidate_filter();
     });
 
-    let main_loop1 = main_loop.clone();
-    let deleted = window.connect_delete_event(move |_window, _| {
-        main_loop1.quit();
-        gtk::Inhibit(true)
-    });
-
-    window_box.add(&entry);
-    window_box.add(&lbox);
-    scroll.add(&window_box);
-    window.add(&scroll);
-    window.show_all();
+    ui.window_box.add(lbox);
+    ui.window.show_all();
     main_loop.run();
-    window.hide();
+    ui.window.hide();
+    ui.window_box.remove(lbox);
 
-    ctx.pop_thread_default();
+    glib::signal_handler_disconnect(&ui.entry, search_changed);
 
-    window.remove(&scroll);
-
-    glib::signal_handler_disconnect(window, deleted);
-    glib::signal_handler_disconnect(&entry, search_changed);
-
-    for (id, row) in ids {
-        glib::signal_handler_disconnect(&row, id);
-    }
-
-    debug_assert_eq!(Rc::weak_count(&ret), 0);
-    debug_assert_eq!(Rc::strong_count(&ret), 1);
-
-    Rc::try_unwrap(ret).unwrap().into_inner()
+    RET.with(|r| r.take())
 }
 
 fn load_hanja_dict() -> Dict {
@@ -200,13 +209,15 @@ fn main() -> anyhow::Result<()> {
 
     let mut indicator = KimeIndicator::new(color)?;
 
-    let window = gtk::WindowBuilder::new()
-        .default_width(1000)
-        .default_height(800)
-        .resizable(false)
-        .build();
-
     let ctx = glib::MainContext::ref_thread_default();
+    let main_loop = glib::MainLoop::new(Some(&ctx), true);
+    let ui = UiBase::new(&main_loop);
+
+    let start = Instant::now();
+    let emoji_lbox = build_list_box(emoji::EMOJIS.iter().copied(), &main_loop);
+    let elapsed = start.elapsed();
+
+    eprintln!("Build emoji list box! elapsed: {}ms", elapsed.as_millis());
 
     ctx.acquire();
 
@@ -216,6 +227,7 @@ fn main() -> anyhow::Result<()> {
         gio::SocketProtocol::Default,
     )?;
     let listener = gio::SocketListener::new();
+
     let addr = gio::UnixSocketAddress::new(sock_path);
     sock.bind(&addr, true)?;
     sock.listen()?;
@@ -223,6 +235,7 @@ fn main() -> anyhow::Result<()> {
 
     ctx.spawn_local(async move {
         let mut current_lang = [b'e', b'n', b'g'];
+        indicator.eng();
 
         loop {
             let client: gio::SocketConnection = listener.accept_async_future().await.unwrap().0;
@@ -273,9 +286,7 @@ fn main() -> anyhow::Result<()> {
                             let data = data.trim_end();
                             if let Some(entires) = dict.get(data) {
                                 if let Some(hanja) =
-                                    spawn_window(&window, entires.iter().copied(), |l, s| {
-                                        l.contains(s)
-                                    })
+                                    spawn_window(&ui, &build_list_box(entires.iter().copied(), &main_loop), &main_loop)
                                 {
                                     output
                                         .write_all_async_future(
@@ -292,11 +303,7 @@ fn main() -> anyhow::Result<()> {
                     }
                     // emoji
                     b'e' => {
-                        if let Some(emoji) =
-                            spawn_window(&window, emoji::EMOJIS.iter().copied(), |l, s| {
-                                l.contains(s)
-                            })
-                        {
+                        if let Some(emoji) = spawn_window(&ui, &emoji_lbox, &main_loop) {
                             output
                                 .write_all_async_future(
                                     emoji.as_bytes(),
