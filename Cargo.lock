@@ -609,6 +609,7 @@ version = "0.1.0"
 dependencies = [
  "ahash",
  "anyhow",
+ "codegen",
  "gio",
  "glib",
  "gtk",

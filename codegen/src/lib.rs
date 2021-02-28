@@ -1,16 +1,17 @@
 use quick_xml::events::Event;
 use std::collections::BTreeMap;
 use std::fs;
+use std::path::Path;
 use std::io::{BufReader, BufWriter, Write};
 
-fn gen_emoji() -> quick_xml::Result<()> {
-    let emoji_out = fs::File::create(concat!(env!("CARGO_MANIFEST_DIR"), "/../src/emoji.rs"))?;
+pub fn gen_emoji(emoji_out: &Path, annotation_path: &Path) -> quick_xml::Result<()> {
+    let emoji_out = fs::File::create(emoji_out)?;
     let mut emoji_out = BufWriter::new(emoji_out);
 
-    let en_annotation = fs::File::open("/usr/share/unicode/cldr/common/annotations/en.xml")?;
+    let annotation = fs::File::open(annotation_path)?;
     let mut annotation_map: BTreeMap<String, String> = BTreeMap::new();
 
-    let mut r = quick_xml::Reader::from_reader(BufReader::new(en_annotation));
+    let mut r = quick_xml::Reader::from_reader(BufReader::new(annotation));
     let mut buf = Vec::with_capacity(256);
     let mut buf2 = Vec::with_capacity(256);
 
@@ -69,8 +70,4 @@ fn gen_emoji() -> quick_xml::Result<()> {
     writeln!(emoji_out, "];",)?;
 
     Ok(())
-}
-
-fn main() {
-    gen_emoji().expect("gen_emoji");
 }

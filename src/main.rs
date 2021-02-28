@@ -1,4 +1,6 @@
-mod emoji;
+mod emoji {
+    include!(concat!(env!("OUT_DIR"), "/emoji_gen.rs"));
+}
 
 use ahash::AHashMap;
 use gio::prelude::*;
