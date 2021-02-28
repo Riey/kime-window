@@ -1,5 +1,5 @@
-use ahash::AHashMap;
 use quick_xml::events::Event;
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{BufReader, BufWriter, Write};
 
@@ -8,7 +8,7 @@ fn gen_emoji() -> quick_xml::Result<()> {
     let mut emoji_out = BufWriter::new(emoji_out);
 
     let en_annotation = fs::File::open("/usr/share/unicode/cldr/common/annotations/en.xml")?;
-    let mut annotation_map: AHashMap<String, String> = AHashMap::new();
+    let mut annotation_map: BTreeMap<String, String> = BTreeMap::new();
 
     let mut r = quick_xml::Reader::from_reader(BufReader::new(en_annotation));
     let mut buf = Vec::with_capacity(256);
